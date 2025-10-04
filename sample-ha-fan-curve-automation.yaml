@@ -1,0 +1,24 @@
+alias: Rack Fan Auto Curve
+description: Set fan override speed based on rack temperature
+triggers:
+  - entity_id: sensor.nexus_22_fan_controller_top_rack_temperature
+    trigger: state
+  - seconds: /30
+    trigger: time_pattern
+conditions:
+  - condition: template
+    value_template: >-
+      {{
+      is_number(states('sensor.nexus_22_fan_controller_top_rack_temperature'))
+      }}
+actions:
+  - target:
+      entity_id: number.nexus_22_fan_controller_top_fan_speed_override
+    data:
+      value: >-
+        {% set temp =
+        states('sensor.nexus_22_fan_controller_top_rack_temperature') | float %}
+        {% if temp > 105 %}100 {% elif temp > 95 %}85 {% elif temp > 85 %}70 {%
+        elif temp > 75 %}50 {% else %}30 {% endif %}
+    action: number.set_value
+mode: single

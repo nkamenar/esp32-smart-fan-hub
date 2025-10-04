@@ -79,3 +79,11 @@ The controller drives **four fans via a single fan hub**. All fans run at the sa
    ``` bash
    esphome run nexus-22-fan-controller-top.yaml
 5. In Home Assistant, create an input_boolean.ha_heartbeat entity to act as the heartbeat.
+
+## 📝 Notes
+
+- All sensitive values (Wi-Fi, API, OTA credentials) are stored in secrets.yaml and not committed to this repository.
+
+- The configuration is modular and can be adapted for different numbers of fans or alternate pin assignments.
+
+- If the DS18B20 sensor returns NaN, ESPHome publishes unavailable to Home Assistant instead of a false reading.

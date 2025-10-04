@@ -1,0 +1,18 @@
+alias: ESP Heartbeat
+description: ""
+triggers:
+  - trigger: time_pattern
+    seconds: /10
+conditions: []
+actions:
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.ha_heartbeat
+    data: {}
+  - delay:
+      seconds: 1
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.ha_heartbeat
+    data: {}
+mode: restart

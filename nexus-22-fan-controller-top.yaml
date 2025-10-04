@@ -1,0 +1,186 @@
+esphome:
+  name: nexus-22-fan-controller-top
+  friendly_name: nexus-22-fan-controller-top
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          if (!id(ha_heartbeat).state) {
+            ESP_LOGI("on_boot", "HA offline at boot — disabling override");
+            id(fan_override_enabled).turn_off();
+            id(ha_online) = false;
+          } else {
+            ESP_LOGI("on_boot", "HA online at boot — enabling override");
+            id(fan_override_enabled).turn_on();
+            id(ha_online) = true;
+            id(last_ha_heartbeat) = millis();
+          }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret iot_wifi_ssid
+  password: !secret iot_wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: !secret ap_ssid
+    password: !secret ap_password
+
+captive_portal:
+output:
+  - platform: ledc
+    pin: 18
+    frequency: 25000 Hz
+    id: fan_pwm
+
+fan:
+  - platform: speed
+    output: fan_pwm
+    name: "Rack Fans"
+    id: rack_fans
+    speed_count: 100  # allows 0-100% control
+    restore_mode: ALWAYS_ON
+
+# DS18B20 Temperature Sensor
+one_wire:
+  - platform: gpio
+    pin: 4
+    id: rack_one_wire
+
+sensor:
+  - platform: dallas_temp
+    one_wire_id: rack_one_wire
+    address: 0x996d86008772f328
+    name: "Rack Temperature"
+    id: rack_temp
+    unit_of_measurement: "°F"
+    update_interval: 10s
+    filters:
+      - lambda: |-
+          if (isnan(x)) {
+            return NAN;     // publish unavailable to HA
+          } else {
+            return (x * 9.0f / 5.0f) + 32.0f;
+          }
+  - platform: template
+    name: "Rack Fan RPM"
+    unit_of_measurement: "RPM"
+    accuracy_decimals: 0
+    lambda: |-
+      return id(rack_fans).speed * 18.0;
+    update_interval: 3s
+    state_class: measurement
+
+
+# Optional: Show raw PWM %
+text_sensor:
+  - platform: template
+    name: "Rack Fan Speed %"
+    lambda: |-
+      return std::to_string((int)id(rack_fans).speed) + "%";
+    update_interval: 3s
+
+number:
+  - platform: template
+    name: "Fan Speed Override"
+    id: fan_speed_override
+    min_value: 0
+    max_value: 100
+    step: 1
+    optimistic: true
+    restore_value: true
+
+switch:
+  - platform: template
+    name: "Fan Override Enabled"
+    id: fan_override_enabled
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+binary_sensor:
+  - platform: homeassistant
+    id: ha_heartbeat
+    entity_id: input_boolean.ha_heartbeat
+    on_press:
+      then:
+        - lambda: |-
+            id(last_ha_heartbeat) = millis();
+
+globals:
+  - id: last_ha_heartbeat
+    type: unsigned long
+    restore_value: false
+    initial_value: '0'
+  - id: ha_online
+    type: bool
+    restore_value: false
+    initial_value: 'true'
+
+interval:
+  # Reset the heartbeat every 30 seconds — HA will turn it back on if it's online
+  - interval: 30s
+    then:
+      - homeassistant.service:
+          service: input_boolean.turn_off
+          data:
+            entity_id: input_boolean.ha_heartbeat
+
+  # Check for heartbeat status every 10 seconds
+  - interval: 10s
+    then:
+      - lambda: |-
+          unsigned long now = millis();
+          if (now - id(last_ha_heartbeat) > 30000) {
+            // more than 30s since last pulse — assume HA offline
+            if (id(ha_online)) {
+              ESP_LOGI("ha_status", "HA heartbeat missed — falling back to onboard control.");
+              id(ha_online) = false;
+              id(fan_override_enabled).turn_off();
+            }
+          } else {
+            // HA heartbeat still active
+            if (!id(ha_online)) {
+              ESP_LOGI("ha_status", "HA heartbeat resumed — using override speed.");
+              id(ha_online) = true;
+              id(fan_override_enabled).turn_on();
+            }
+          }
+
+  # === Fan Curve Logic ===
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (!id(fan_override_enabled).state) {
+            float temp = id(rack_temp).state;
+            int speed = 30;
+            if (temp > 105) {
+              speed = 100;
+            } else if (temp > 95) {
+              speed = 85;
+            } else if (temp > 85) {
+              speed = 70;
+            } else if (temp > 75) {
+              speed = 50;
+            }
+            id(rack_fans).make_call().set_speed(speed).perform();
+            ESP_LOGI("fan_control", "Onboard fan curve active — setting fan speed to %d%%", speed);
+          } else {
+            int override_speed = (int)id(fan_speed_override).state;
+            id(rack_fans).make_call().set_speed(override_speed).perform();
+          }
